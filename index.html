@@ -512,7 +512,7 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       if (sub() === 'paper') return renderPapers();
       if (sub() === 'org') return renderOrgs();
       var xs = items.filter(function(x){ return pass(x); });
-      var ob = S.org ? '<div class="orgbar"><span><b>' + esc(S.org.n) + '</b> 관련 기사 ' + xs.length + '건</span><button id="orgx">해제 ×</button></div>' : '';
+      var ob = S.org ? '<div class="orgbar"><span><b>' + esc(S.org.n) + '</b> 관련 기사 ' + xs.length + '건</span><button id="orgx">기업 목록으로 ←</button></div>' : '';
       if (!xs.length) { $('list').innerHTML = ob + '<div class="empty">조건에 맞는 기사가 없습니다.</div>'; return xs; }
       var gs = group(xs);
       var since = meta.since || '', h = ob, day = '', dayN = {};
@@ -564,9 +564,9 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
         if (S.kind === 'intl') {
           var rc = {}, base = items.filter(function(x){ var r = S.reg; S.reg = 'all'; var ok = pass(x, true); S.reg = r; return ok; });
           base.forEach(function(x){ x.r.forEach(function(r){ rc[r] = (rc[r]||0) + 1; }); });
-          var rmax = Math.max.apply(null, Object.keys(REG).map(function(r){ return rc[r]||0; }).concat([1]));
+          var rmax = Math.max.apply(null, ['eu','na','cn','jp'].map(function(r){ return rc[r]||0; }).concat([1]));
           var rb = '<p class="cap">한국어 기사 중 해외 이야기 + 현지 언론·정부 원문 · 막대를 누르면 권역 필터</p>';
-          Object.keys(REG).forEach(function(r){
+          ['eu','na','cn','jp'].forEach(function(r){
             rb += '<div class="cb" data-r="' + r + '"><span class="lb">' + REG[r] + '</span><span class="tr"><span class="fl" style="display:block;width:' +
               ((rc[r]||0)/rmax*100).toFixed(1) + '%"></span></span><span class="v">' + (rc[r]||0) + '</span></div>';
           });
@@ -640,12 +640,12 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
     $('periodSeg').addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) { S.days = +b.dataset.v; render(); } });
     $('list').addEventListener('click', function(e){
       if (e.target.id === 'more') { S.shown += 60; renderList(); return; }
-      if (e.target.id === 'orgx') { S.org = null; S.view = 'org'; render(); return; }
+      if (e.target.id === 'orgx') { S.org = null; S.view = 'org'; S.kind = S.orgFrom || 'intl'; render(); return; }
       var ps = e.target.closest('[data-ps]');
       if (ps) { S.psort = ps.dataset.ps; renderList(); return; }
       var ct = e.target.closest('.ct');
       if (ct && !ct.disabled) {
-        S.org = ORGS.filter(function(o){ return o.n === ct.dataset.org; })[0]; S.view = 'news';
+        S.org = ORGS.filter(function(o){ return o.n === ct.dataset.org; })[0]; S.view = 'news'; S.orgFrom = S.kind;
         if (S.kind === 'intl') S.reg = 'all';   // 기업 이름이 나온 국문 기사도 함께 보이게
         S.kind = 'all'; render(); window.scrollTo({top:0, behavior:'smooth'}); return;
       }
