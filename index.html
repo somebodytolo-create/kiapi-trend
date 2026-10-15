@@ -161,6 +161,21 @@ header.top .wrap{display:flex;align-items:flex-end;gap:16px;padding-top:26px;pad
 .trl{color:var(--tx3);font-size:12px;text-decoration:underline;text-underline-offset:2px}
 .trl:hover{color:var(--pt)}
 .seg.hide{display:none}
+.org{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:12px 18px;border-bottom:1px solid var(--line2);align-items:start}
+.org .nm{font-size:14.5px;font-weight:700;letter-spacing:-.2px}
+.org .nm a:hover{color:var(--pt)}
+.org .nm small{font-weight:500;color:var(--tx3);font-size:12.5px;margin-left:6px}
+.org .ds{grid-column:1;font-size:12.5px;color:var(--tx2);line-height:1.5}
+.org .ct{grid-row:1 / span 2;grid-column:2;align-self:center;border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 10px;
+  font-size:12px;color:var(--tx2);cursor:pointer;white-space:nowrap;font-family:inherit}
+.org .ct:hover{border-color:var(--pt-line);color:var(--pt)}
+.org .ct[disabled]{cursor:default;opacity:.55}
+.orgbar{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 18px;background:var(--pt-soft);
+  border-bottom:1px solid var(--pt-line);font-size:13px;color:var(--pt)}
+.orgbar button{border:0;background:none;color:var(--pt);font-weight:700;cursor:pointer;font-family:inherit;font-size:12.5px}
+.day .sort{display:inline-flex;gap:8px}
+.day .sort button{border:0;background:none;padding:0;font:inherit;font-weight:500;color:var(--tx3);cursor:pointer}
+.day .sort button.on{color:var(--pt);font-weight:700}
 .stat{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .stat div{background:#f8fafc;border-radius:10px;padding:10px 12px}
 .stat b{display:block;font-size:18px;font-weight:800;letter-spacing:-.3px}
@@ -232,6 +247,9 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       <div class="seg" id="kindSeg">
         <button data-v="all" class="on">전체</button><button data-v="news">뉴스</button><button data-v="policy">정책</button><button data-v="market">시장·효과</button><button data-v="intl">해외</button><button data-v="ann">사업공고</button>
       </div>
+      <div class="seg hide" id="viewSeg">
+        <button data-v="news" class="on">기사</button><button data-v="paper">논문</button><button data-v="org">기업·기관</button>
+      </div>
       <div class="seg hide" id="regSeg">
         <button data-v="all" class="on">전 권역</button><button data-v="eu">유럽</button><button data-v="na">북미</button><button data-v="cn">중국</button><button data-v="jp">일본</button>
       </div>
@@ -281,7 +299,9 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
     res.slice(1).forEach(function(a){ items = items.concat(a); });
     var anns = [];
     try { anns = await open('data/ann.enc.json', password); } catch(e){}
-    return {meta: meta, kw: res[0], items: items, anns: anns};
+    var ref = {papers: []};
+    try { ref = await open('data/ref.enc.json', password); } catch(e){}
+    return {meta: meta, kw: res[0], items: items, anns: anns, papers: ref.papers || [], papersAt: ref.at || ''};
   }
 
   function busy(on){ btn.disabled = on; btn.textContent = on ? '확인 중…' : '확인'; }
@@ -324,11 +344,17 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       a.dd = a.re ? Math.round((new Date(a.re) - new Date(TODAY)) / 864e5) : null;
     });
     items.sort(function(a,b){ return a.p < b.p ? 1 : a.p > b.p ? -1 : 0; });
-    var S = {cl:'all', kind:'all', reg:'all', days:30, q:'', shown:60};
-    var REG = {eu:'유럽', na:'북미', cn:'중국', jp:'일본'}, LANG = {en:'EN', ja:'日', zh:'中'};
+    var S = {cl:'all', kind:'all', reg:'all', view:'news', psort:'new', org:null, days:30, q:'', shown:60};
+    var REG = {eu:'유럽', na:'북미', cn:'중국', jp:'일본', kr:'국내'}, LANG = {en:'EN', ja:'日', zh:'中'};
+    var papers = d.papers || [], ORGS = (d.kw.orgs || []);
+    // 영문 별칭은 단어 단위로 맞춘다(Vay가 'Vaya'에 걸리지 않게)
+    ORGS.forEach(function(o){ o.re = o.a.map(function(a){ var e = a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return /^[A-Za-z0-9 .\-]+$/.test(a) ? new RegExp('(^|[^A-Za-z])' + e + '($|[^A-Za-z])', 'i') : new RegExp(e); }); });
+    function orgHit(o, t){ return o.re.some(function(r){ return r.test(t); }); }
+    function sub(){ return (S.kind === 'market' || S.kind === 'intl') ? S.view : 'news'; }
     try { var st = JSON.parse(localStorage.getItem('kiapitrend_view') || '{}');
       if (st.cl && (st.cl === 'all' || byId[st.cl])) S.cl = st.cl;
-      if (st.kind) S.kind = st.kind; if (st.reg) S.reg = st.reg; if (st.days != null) S.days = st.days; } catch(e){}
+      if (st.kind) S.kind = st.kind; if (st.reg) S.reg = st.reg; if (st.view) S.view = st.view; if (st.days != null) S.days = st.days; } catch(e){}
 
     var esc = function(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
@@ -347,17 +373,37 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       if (S.kind === 'market' && !x.m) return false;
       if (S.kind === 'intl' && (!x.r || (S.reg !== 'all' && x.r.indexOf(S.reg) < 0))) return false;
       if (S.days && NOW - parse(x.p) > S.days * 864e5) return false;
+      if (S.org && !orgHit(S.org, x.t)) return false;
       if (S.q) { var h = (x.t + ' ' + x.s).toLowerCase();
         if (!S.q.toLowerCase().split(/\s+/).every(function(w){ return h.indexOf(w) >= 0; })) return false; }
       return true;
     }
-    function save(){ try { localStorage.setItem('kiapitrend_view', JSON.stringify({cl:S.cl, kind:S.kind, reg:S.reg, days:S.days})); } catch(e){} }
+    function words(h){ return !S.q || S.q.toLowerCase().split(/\s+/).every(function(w){ return h.toLowerCase().indexOf(w) >= 0; }); }
+    // 논문: 시장·효과 보기는 경제·시장 논문, 해외 보기는 해외 저자 논문(권역 필터)
+    function passPaper(x, ignoreCl){
+      if (!ignoreCl && S.cl !== 'all' && x.c.indexOf(S.cl) < 0) return false;
+      if (S.kind === 'market' && !x.m) return false;
+      if (S.kind === 'intl') {
+        var fr = x.r.filter(function(r){ return r !== 'kr'; });
+        if (!fr.length || (S.reg !== 'all' && fr.indexOf(S.reg) < 0)) return false;
+      }
+      return words(x.t + ' ' + x.v + ' ' + x.au);
+    }
+    function passOrg(o, ignoreCl){
+      if (!ignoreCl && S.cl !== 'all' && o.c.indexOf(S.cl) < 0) return false;
+      if (S.kind === 'intl' && S.reg !== 'all' && o.r !== S.reg) return false;
+      return words(o.n + ' ' + o.ko + ' ' + o.d);
+    }
+    function save(){ try { localStorage.setItem('kiapitrend_view', JSON.stringify({cl:S.cl, kind:S.kind, reg:S.reg, view:S.view, days:S.days})); } catch(e){} }
 
     $('status').innerHTML = '마지막 수집 <b>' + esc(md(meta.last_run) + ' ' + meta.last_run.slice(11)) +
       '</b><br>누적 <b>' + items.length.toLocaleString() + '</b>건 · 하루 3회(06·12·17시) 자동 수집';
 
     function renderTabs(){
-      var base = (S.kind === 'ann' ? anns : items).filter(function(x){ return pass(x, true); });
+      var v = sub();
+      var base = v === 'paper' ? papers.filter(function(x){ return passPaper(x, true); })
+               : v === 'org' ? ORGS.filter(function(o){ return passOrg(o, true); })
+               : (S.kind === 'ann' ? anns : items).filter(function(x){ return pass(x, true); });
       var cnt = {}; base.forEach(function(x){ x.c.forEach(function(c){ cnt[c] = (cnt[c]||0) + 1; }); });
       var h = '<button class="tab' + (S.cl==='all'?' on':'') + '" data-c="all">전체<span class="n">' + base.length + '</span></button>';
       CL.forEach(function(c){
@@ -412,12 +458,64 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       return xs;
     }
 
+    function renderPapers(){
+      var xs = papers.filter(function(x){ return passPaper(x); });
+      if (S.psort === 'cit') xs.sort(function(a, b){ return b.cit - a.cit || (a.p < b.p ? 1 : -1); });
+      var head = '<div class="day">논문 ' + xs.length + '편 · 최근 18개월 · OpenAlex' +
+        '<span class="sort"><button data-ps="new" class="' + (S.psort === 'new' ? 'on' : '') + '">최신순</button>' +
+        '<button data-ps="cit" class="' + (S.psort === 'cit' ? 'on' : '') + '">인용순</button></span></div>';
+      if (!xs.length) { $('list').innerHTML = head + '<div class="empty">조건에 맞는 논문이 없습니다.' +
+        (papers.length ? '' : '<br>논문은 하루 한 번 수집됩니다.') + '</div>'; return xs; }
+      var h = head;
+      xs.slice(0, S.shown).forEach(function(x){
+        var chips = S.cl === 'all' ? x.c.map(function(c){ return byId[c] ? '<span class="chip">' + esc(byId[c].short) + '</span>' : ''; }).join('') : '';
+        var rg = x.r.map(function(r){ return '<span class="rg">' + REG[r] + '</span>'; }).join('');
+        h += '<div class="it"><a href="' + esc(x.u) + '" target="_blank" rel="noopener noreferrer"><div class="t">' + esc(x.t) + '</div></a>' +
+          '<div class="m">' + (x.m ? '<span class="badge soft">시장·효과</span>' : '') + rg + '<span class="src">' + esc(x.v) + '</span>' +
+          '<span>' + esc(x.p.slice(0, 7).replace('-', '.')) + '</span><span>' + esc(x.au) + '</span>' +
+          (x.cit ? '<span>인용 ' + x.cit + '</span>' : '') +
+          (x.oa ? '<a class="trl" href="' + esc(x.oa) + '" target="_blank" rel="noopener noreferrer">원문 무료</a>' : '') +
+          '<a class="trl" href="https://translate.google.com/?sl=en&tl=ko&op=translate&text=' + encodeURIComponent(x.t) + '" target="_blank" rel="noopener noreferrer">제목 번역</a>' +
+          chips + '</div></div>';
+      });
+      if (xs.length > S.shown) h += '<button class="more" id="more">더 보기 (' + S.shown + ' / ' + xs.length + '편)</button>';
+      $('list').innerHTML = h;
+      return xs;
+    }
+
+    // 기업·기관: 권역별로 묶고, 현재 기간·묶음의 기사 제목에 이름이 나온 횟수로 정렬
+    function renderOrgs(){
+      var os = ORGS.filter(function(o){ return passOrg(o); });
+      var pool = items.filter(function(x){
+        return (S.cl === 'all' || x.c.indexOf(S.cl) >= 0) && !(S.days && NOW - parse(x.p) > S.days * 864e5); });
+      os.forEach(function(o){ o.n_ = pool.filter(function(x){ return orgHit(o, x.t); }).length; });
+      if (!os.length) { $('list').innerHTML = '<div class="empty">조건에 맞는 기업·기관이 없습니다.</div>'; return os; }
+      var h = '';
+      ['na','eu','cn','jp'].forEach(function(r){
+        var g = os.filter(function(o){ return o.r === r; }).sort(function(a, b){ return b.n_ - a.n_ || (a.k < b.k ? -1 : 1); });
+        if (!g.length) return;
+        h += '<div class="day">' + REG[r] + '<span>' + g.length + '곳 · 기사 언급 ' + (S.days ? '최근 ' + S.days + '일' : '전체 기간') + '</span></div>';
+        g.forEach(function(o){
+          var chips = S.cl === 'all' ? o.c.map(function(c){ return byId[c] ? '<span class="chip">' + esc(byId[c].short) + '</span>' : ''; }).join(' ') : '';
+          h += '<div class="org"><div class="nm"><a href="' + esc(o.u) + '" target="_blank" rel="noopener noreferrer">' + esc(o.n) + ' ↗</a>' +
+            '<small>' + esc(o.ko) + '</small> <span class="chip">' + esc(o.k) + '</span></div>' +
+            '<div class="ds">' + esc(o.d) + (chips ? ' ' + chips : '') + '</div>' +
+            '<button class="ct" data-org="' + esc(o.n) + '"' + (o.n_ ? '' : ' disabled') + '>관련 기사 ' + o.n_ + '건</button></div>';
+        });
+      });
+      $('list').innerHTML = h;
+      return os;
+    }
+
     function renderList(){
       if (S.kind === 'ann') return renderAnns();
+      if (sub() === 'paper') return renderPapers();
+      if (sub() === 'org') return renderOrgs();
       var xs = items.filter(function(x){ return pass(x); });
-      if (!xs.length) { $('list').innerHTML = '<div class="empty">조건에 맞는 기사가 없습니다.</div>'; return xs; }
+      var ob = S.org ? '<div class="orgbar"><span><b>' + esc(S.org.n) + '</b> 관련 기사 ' + xs.length + '건</span><button id="orgx">해제 ×</button></div>' : '';
+      if (!xs.length) { $('list').innerHTML = ob + '<div class="empty">조건에 맞는 기사가 없습니다.</div>'; return xs; }
       var gs = group(xs);
-      var since = meta.since || '', h = '', day = '', dayN = {};
+      var since = meta.since || '', h = ob, day = '', dayN = {};
       gs.forEach(function(g){ var k = g.head.p.slice(0,10); dayN[k] = (dayN[k]||0) + 1 + g.sims.length; });
       gs.slice(0, S.shown).forEach(function(g, gi){
         var x = g.head, k = x.p.slice(0,10);
@@ -523,8 +621,10 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       var cnt = renderTabs(); renderList(); renderSide(cnt);
       [].forEach.call(document.querySelectorAll('#kindSeg button'), function(b){ b.classList.toggle('on', b.dataset.v === S.kind); });
       $('regSeg').classList.toggle('hide', S.kind !== 'intl');
+      $('viewSeg').classList.toggle('hide', S.kind !== 'market' && S.kind !== 'intl');
+      [].forEach.call(document.querySelectorAll('#viewSeg button'), function(b){ b.classList.toggle('on', b.dataset.v === S.view); });
       [].forEach.call(document.querySelectorAll('#regSeg button'), function(b){ b.classList.toggle('on', b.dataset.v === S.reg); });
-      $('periodSeg').classList.toggle('off', S.kind === 'ann');
+      $('periodSeg').classList.toggle('off', S.kind === 'ann' || sub() === 'paper');
       $('periodSeg').title = S.kind === 'ann' ? '사업공고는 기간과 관계없이 상태별로 모두 표시됩니다' : '';
       [].forEach.call(document.querySelectorAll('#periodSeg button'), function(b){ b.classList.toggle('on', +b.dataset.v === S.days); });
       save();
@@ -534,11 +634,21 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       var b = e.target.closest('.tab'); if (!b) return;
       S.cl = b.dataset.c; render(); b.scrollIntoView && b.scrollIntoView({inline:'nearest', block:'nearest'});
     });
-    $('kindSeg').addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) { S.kind = b.dataset.v; render(); } });
+    $('kindSeg').addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) { S.kind = b.dataset.v; S.org = null; render(); } });
+    $('viewSeg').addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) { S.view = b.dataset.v; S.org = null; render(); } });
     $('regSeg').addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) { S.reg = b.dataset.v; render(); } });
     $('periodSeg').addEventListener('click', function(e){ var b = e.target.closest('button'); if (b) { S.days = +b.dataset.v; render(); } });
     $('list').addEventListener('click', function(e){
       if (e.target.id === 'more') { S.shown += 60; renderList(); return; }
+      if (e.target.id === 'orgx') { S.org = null; S.view = 'org'; render(); return; }
+      var ps = e.target.closest('[data-ps]');
+      if (ps) { S.psort = ps.dataset.ps; renderList(); return; }
+      var ct = e.target.closest('.ct');
+      if (ct && !ct.disabled) {
+        S.org = ORGS.filter(function(o){ return o.n === ct.dataset.org; })[0]; S.view = 'news';
+        if (S.kind === 'intl') S.reg = 'all';   // 기업 이름이 나온 국문 기사도 함께 보이게
+        S.kind = 'all'; render(); window.scrollTo({top:0, behavior:'smooth'}); return;
+      }
       var sb = e.target.closest('.sim');
       if (sb) { var el = $('sim' + sb.dataset.g), o = el.classList.toggle('open');
         sb.textContent = sb.textContent.replace(/[▾▴]/, o ? '▴' : '▾'); }

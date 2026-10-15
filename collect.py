@@ -182,6 +182,40 @@ ANN_GENERAL = ["자동차", "미래차", "차량", "자율주행", "도로교통
 IRIS = "https://www.iris.go.kr/contents/"
 
 
+OPENALEX = "https://api.openalex.org/works?"
+CC_REGION = {**{c: "eu" for c in "AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE GB CH NO IS".split()},
+             "US": "na", "CA": "na", "CN": "cn", "HK": "cn", "JP": "jp", "KR": "kr"}
+
+
+def openalex(q, since):
+    """제목 불리언 검색으로 최근 논문을 관련도순으로 받는다."""
+    url = OPENALEX + urllib.parse.urlencode({
+        "filter": f"title.search:{q},from_publication_date:{since},type:article|preprint|review",
+        "sort": "relevance_score:desc", "per_page": 25,
+        "select": "id,doi,title,publication_date,cited_by_count,primary_location,authorships,open_access"})
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return json.loads(r.read())["results"]
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(15 * (attempt + 1))
+
+
+def paper_of(w, cid, m):
+    loc = w.get("primary_location") or {}
+    au = w.get("authorships") or []
+    cc = sorted({i["country_code"] for a in au for i in a.get("institutions") or [] if i.get("country_code")})
+    first = ((au[0].get("author") or {}).get("display_name") or "") if au else ""
+    return {"id": w["id"].rsplit("/", 1)[-1], "t": re.sub(r"<[^>]+>", "", w["title"]).strip(), "p": w.get("publication_date") or "",
+            "v": ((loc.get("source") or {}).get("display_name") or ""), "au": first + (f" 외 {len(au) - 1}명" if len(au) > 1 else ""),
+            "cc": cc, "r": sorted({CC_REGION[c] for c in cc if c in CC_REGION}), "cit": w.get("cited_by_count") or 0,
+            "u": w.get("doi") or loc.get("landing_page_url") or w["id"], "oa": (w.get("open_access") or {}).get("oa_url") or "",
+            "c": [cid], "m": m}
+
+
 def iris(prg, page):
     req = urllib.request.Request(IRIS + "retrieveBsnsAncmBtinSituList.do",
                                  data=urllib.parse.urlencode({"pageIndex": page, "ancmPrg": prg}).encode(),
@@ -415,6 +449,50 @@ def main():
             x["m"] = 1
         else:
             x.pop("m", None)
+
+    # 논문(OpenAlex): 하루 한 번만 갱신 — 최근 18개월, 묶음별 검색식
+    ref_path = os.path.join(DATA, "ref.enc.json")
+    ref = read(ref_path) if os.path.exists(ref_path) else {"papers": [], "at": ""}
+    if not ref["at"] or NOW - datetime.datetime.strptime(ref["at"], "%Y-%m-%d %H:%M").replace(tzinfo=KST) > datetime.timedelta(hours=20):
+        papers = {x["id"]: x for x in ref["papers"]}
+        for x in papers.values():
+            x["c"], x["m"] = [], 0   # 이번 검색 기준으로 묶음을 다시 붙인다
+        since = (NOW - datetime.timedelta(days=540)).strftime("%Y-%m-%d")
+        n_ok = 0
+        for cl in kw["clusters"]:
+            for pq in cl.get("papers", []):
+                try:
+                    res = openalex(pq["q"], since)
+                    n_ok += 1
+                except Exception as e:
+                    errors.append(f"논문 {cl['id']}: {e}")
+                    continue
+                for w in res:
+                    t = w.get("title") or ""
+                    venue = (((w.get("primary_location") or {}).get("source") or {}).get("display_name") or "")
+                    # 저장소 업로드물·출처 불명·전부 대문자(부실 학술지에 흔함) 제목은 뺀다
+                    if not t or not venue or any(z in venue for z in ("Zenodo", "Figshare", "SSRN", "Preprints.org"))                             or sum(ch.isupper() for ch in t) > 0.6 * sum(ch.isalpha() for ch in t):
+                        continue
+                    new = paper_of(w, cl["id"], pq["m"])
+                    x = papers.get(new["id"])
+                    if x is None:
+                        papers[new["id"]] = x = new
+                    else:
+                        x.update({k: v for k, v in new.items() if k not in ("c", "m")})
+                    if cl["id"] not in x["c"]:
+                        x["c"].append(cl["id"])
+                    x["m"] = max(x["m"], pq["m"])
+                qhits[f'{cl["id"]}|논문: {pq["q"][:40]}'] = len(res)
+                time.sleep(2)
+        if n_ok:   # 전부 실패하면 이전 목록을 그대로 둔다
+            keep = [x for x in papers.values() if x["c"] or x["p"] >= since]
+            for x in keep:
+                if not x["c"]:   # 검색식이 바뀌어 빠진 옛 논문은 버린다
+                    x["drop"] = 1
+            ref = {"papers": sorted([x for x in keep if not x.pop("drop", 0)], key=lambda x: x["p"], reverse=True),
+                   "at": NOW.strftime("%Y-%m-%d %H:%M")}
+            write(ref_path, ref, salt)
+    meta["papers"] = len(ref["papers"])
 
     # 월별 파일로 다시 나눠 쓰기 (바뀐 달만 실제로 파일이 바뀐다)
     by_month = {}
