@@ -21,15 +21,21 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q cryptography
-      - run: python collect.py
+      - name: collect & commit
         env:
           TREND_PW: ${{ secrets.TREND_PW }}
-      - name: commit
         run: |
           git config user.name "kiapi-trend-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data
-          if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
-          git commit -q -m "수집 $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')"
-          for i in 1 2 3; do git pull -q --rebase && git push -q && exit 0; sleep 5; done
+          # 항상 최신 main 위에서 수집한다 — 앞선 실행이 먼저 올린 결과를 덮지 않도록,
+          # 푸시가 밀리면 최신으로 맞춘 뒤 다시 수집해서 올린다
+          for i in 1 2 3; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            python collect.py
+            git add data
+            if git diff --cached --quiet; then echo "변경 없음"; exit 0; fi
+            git commit -q -m "수집 $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M')"
+            git push -q origin HEAD:main && exit 0
+            sleep 10
+          done
           exit 1
