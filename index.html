@@ -92,6 +92,7 @@ header.top .wrap{display:flex;align-items:flex-end;gap:16px;padding-top:26px;pad
 .seg{display:inline-flex;background:#fff;border:1px solid var(--line);border-radius:10px;padding:3px}
 .seg button{border:0;background:none;padding:6px 12px;font-size:13px;color:var(--tx2);border-radius:7px;cursor:pointer;font-weight:600}
 .seg button.on{background:var(--pt-soft);color:var(--pt)}
+.seg.off{opacity:.4;pointer-events:none}
 .search{position:relative;margin-left:auto;flex:0 1 300px}
 .search input{width:100%;border:1px solid var(--line);border-radius:10px;padding:8px 32px 8px 12px;font-size:13px;
   font-family:inherit;outline:none;background:#fff}
@@ -214,7 +215,7 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
   <header class="top"><div class="wrap">
     <div>
       <h1 class="ttl-main">R&amp;D 동향 아카이브</h1>
-      <p class="ttl-sub">전략기획본부 과제·특허·논문·SW에서 뽑은 키워드로 모은 뉴스와 정책</p>
+      <p class="ttl-sub">전략기획본부 과제·특허·논문·SW에서 뽑은 키워드로 모은 뉴스·정책·사업공고</p>
     </div>
     <div class="status" id="status"></div>
   </div></header>
@@ -222,7 +223,7 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
   <div class="wrap">
     <div class="bar">
       <div class="seg" id="kindSeg">
-        <button data-v="all" class="on">전체</button><button data-v="news">뉴스</button><button data-v="policy">정책</button>
+        <button data-v="all" class="on">전체</button><button data-v="news">뉴스</button><button data-v="policy">정책</button><button data-v="ann">사업공고</button>
       </div>
       <div class="seg" id="periodSeg">
         <button data-v="7">7일</button><button data-v="30" class="on">30일</button><button data-v="90">90일</button><button data-v="0">전체</button>
@@ -234,7 +235,7 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       <aside class="side-col" id="side"></aside>
     </div>
   </div>
-  <footer>Google 뉴스·정책브리핑 검색 결과의 제목·링크만 보관합니다 · © 2026 유정</footer>
+  <footer>Google 뉴스·정책브리핑·부처·공공기관 검색 결과와 IRIS 사업공고의 제목·링크만 보관합니다 · © 2026 유정</footer>
 </div>
 
 <script>
@@ -268,7 +269,9 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       (meta.months || []).map(function(m){ return open('data/' + m + '.enc.json', password); })));
     var items = [];
     res.slice(1).forEach(function(a){ items = items.concat(a); });
-    return {meta: meta, kw: res[0], items: items};
+    var anns = [];
+    try { anns = await open('data/ann.enc.json', password); } catch(e){}
+    return {meta: meta, kw: res[0], items: items, anns: anns};
   }
 
   function busy(on){ btn.disabled = on; btn.textContent = on ? '확인 중…' : '확인'; }
@@ -302,7 +305,14 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
   function App(d){
     var CL = d.kw.clusters, byId = {};
     CL.forEach(function(c){ byId[c.id] = c; });
-    var meta = d.meta, items = d.items;
+    var meta = d.meta, items = d.items, anns = d.anns || [];
+    var TODAY = new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10);   // KST 오늘
+    // 공고 상태: 접수예정 / 접수중 / 마감 / 기관게시(접수기간 정보 없음)
+    anns.forEach(function(a){
+      a.s = a.org; a.p = (a.de || '') + ' 00:00';
+      a.stt = a.rs && TODAY < a.rs ? 'pre' : a.re && TODAY <= a.re ? 'ing' : a.re ? 'end' : 'web';
+      a.dd = a.re ? Math.round((new Date(a.re) - new Date(TODAY)) / 864e5) : null;
+    });
     items.sort(function(a,b){ return a.p < b.p ? 1 : a.p > b.p ? -1 : 0; });
     var S = {cl:'all', kind:'all', days:30, q:'', shown:60};
     try { var st = JSON.parse(localStorage.getItem('kiapitrend_view') || '{}');
@@ -318,6 +328,9 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
 
     function pass(x, ignoreCl){
       if (!ignoreCl && S.cl !== 'all' && x.c.indexOf(S.cl) < 0) return false;
+      if (S.kind === 'ann') {   // 공고는 상태별로 정렬해 전부 보여 준다(기간 필터 미적용)
+        return !S.q || S.q.toLowerCase().split(/\s+/).every(function(w){ return (x.t + ' ' + x.org + ' ' + (x.gov||'')).toLowerCase().indexOf(w) >= 0; });
+      }
       if (S.kind === 'news' && x.k !== 'news') return false;
       if (S.kind === 'policy' && x.k === 'news') return false;
       if (S.days && NOW - parse(x.p) > S.days * 864e5) return false;
@@ -331,7 +344,7 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       '</b><br>누적 <b>' + items.length.toLocaleString() + '</b>건 · 하루 3회(06·12·17시) 자동 수집';
 
     function renderTabs(){
-      var base = items.filter(function(x){ return pass(x, true); });
+      var base = (S.kind === 'ann' ? anns : items).filter(function(x){ return pass(x, true); });
       var cnt = {}; base.forEach(function(x){ x.c.forEach(function(c){ cnt[c] = (cnt[c]||0) + 1; }); });
       var h = '<button class="tab' + (S.cl==='all'?' on':'') + '" data-c="all">전체<span class="n">' + base.length + '</span></button>';
       CL.forEach(function(c){
@@ -357,7 +370,37 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       return out;
     }
 
+    function renderAnns(){
+      var xs = anns.filter(function(x){ return pass(x); });
+      if (!xs.length) { $('list').innerHTML = '<div class="empty">조건에 맞는 공고가 없습니다.</div>'; return xs; }
+      var ord = {ing:0, pre:1, web:2, end:3};
+      xs.sort(function(a, b){
+        if (ord[a.stt] !== ord[b.stt]) return ord[a.stt] - ord[b.stt];
+        if (a.stt === 'ing') return a.re < b.re ? -1 : 1;
+        if (a.stt === 'pre') return a.rs < b.rs ? -1 : 1;
+        return a.de < b.de ? 1 : -1;
+      });
+      var HEAD = {ing:'접수 중', pre:'접수 예정', web:'기관 게시 공고', end:'마감'};
+      var n = {}; xs.forEach(function(a){ n[a.stt] = (n[a.stt]||0) + 1; });
+      var h = '', cur = '';
+      xs.slice(0, S.shown).forEach(function(a){
+        if (a.stt !== cur) { cur = a.stt; h += '<div class="day">' + HEAD[cur] + '<span>' + n[cur] + '건</span></div>'; }
+        var st = a.stt === 'ing' ? '<span class="badge">' + (a.dd === 0 ? '오늘 마감' : 'D-' + a.dd) + '</span>'
+               : a.stt === 'pre' ? '<span class="badge soft">' + md(a.rs) + ' 접수 시작</span>'
+               : a.stt === 'end' ? '<span class="chip">마감</span>' : '';
+        var period = a.rs || a.re ? '<span>접수 ' + (a.rs ? md(a.rs) : '') + ' ~ ' + (a.re ? md(a.re) : '') + '</span>' : '<span>게시 ' + md(a.de) + '</span>';
+        var chips = S.cl === 'all' ? a.c.map(function(c){ return byId[c] ? '<span class="chip">' + esc(byId[c].short) + '</span>' : ''; }).join('') : '';
+        h += '<div class="it"><a href="' + esc(a.u) + '" target="_blank" rel="noopener noreferrer"><div class="t">' + esc(a.t) + '</div></a>' +
+          '<div class="m">' + st + '<span class="src">' + esc(a.org) + (a.gov ? ' · ' + esc(a.gov) : '') + '</span>' + period +
+          '<span>' + esc(a.src === 'IRIS' ? 'IRIS' : a.src) + '</span>' + chips + '</div></div>';
+      });
+      if (xs.length > S.shown) h += '<button class="more" id="more">더 보기 (' + S.shown + ' / ' + xs.length + '건)</button>';
+      $('list').innerHTML = h;
+      return xs;
+    }
+
     function renderList(){
+      if (S.kind === 'ann') return renderAnns();
       var xs = items.filter(function(x){ return pass(x); });
       if (!xs.length) { $('list').innerHTML = '<div class="empty">조건에 맞는 기사가 없습니다.</div>'; return xs; }
       var gs = group(xs);
@@ -371,8 +414,8 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
         var isNew = since && x.f > since && NOW - parse(x.f) < 864e5;
         var cs = []; all.forEach(function(y){ y.c.forEach(function(c){ if (cs.indexOf(c) < 0) cs.push(c); }); });
         var chips = S.cl === 'all' ? cs.map(function(c){ return byId[c] ? '<span class="chip">' + esc(byId[c].short) + '</span>' : ''; }).join('') : '';
-        var kind = all.some(function(y){ return y.k === 'gov'; }) ? 'gov' : all.some(function(y){ return y.k === 'policy'; }) ? 'policy' : 'news';
-        var badge = kind === 'gov' ? '<span class="badge">정부 발표</span>' : kind === 'policy' ? '<span class="badge soft">정책</span>' : '';
+        var kind = ['gov','inst','policy'].filter(function(k){ return all.some(function(y){ return y.k === k; }); })[0] || 'news';
+        var badge = kind === 'gov' ? '<span class="badge">정부 발표</span>' : kind === 'inst' ? '<span class="badge soft">공공기관</span>' : kind === 'policy' ? '<span class="badge soft">정책</span>' : '';
         h += '<div class="it"><a href="' + esc(x.u) + '" target="_blank" rel="noopener noreferrer">' +
           '<div class="t">' + (isNew ? '<span class="new" title="최근 24시간 신규"></span>' : '') + esc(x.t) + '</div></a>' +
           '<div class="m">' + badge + '<span class="src">' + esc(x.s) + '</span><span>' + x.p.slice(11) + '</span>' + chips +
@@ -395,15 +438,17 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       var h = '';
       if (S.cl === 'all') {
         var max = Math.max.apply(null, CL.map(function(c){ return cnt[c.id]||0; }).concat([1]));
-        var bars = '<p class="cap">' + (S.days ? '최근 ' + S.days + '일' : '전체 기간') + ' · 막대를 누르면 해당 묶음으로 이동</p>';
+        var bars = '<p class="cap">' + (S.kind === 'ann' ? '사업공고 전체' : S.days ? '최근 ' + S.days + '일' : '전체 기간') + ' · 막대를 누르면 해당 묶음으로 이동</p>';
         CL.forEach(function(c){
           var v = cnt[c.id]||0;
           bars += '<div class="cb" data-c="' + c.id + '"><span class="lb">' + esc(c.short) + '</span>' +
             '<span class="tr"><span class="fl" style="display:block;width:' + (v/max*100).toFixed(1) + '%"></span></span><span class="v">' + v + '</span></div>';
         });
-        h += wrapOpen('묶음별 기사 수', bars);
+        h += wrapOpen(S.kind === 'ann' ? '묶음별 공고 수' : '묶음별 기사 수', bars);
         var last = (meta.runs||[])[0] || {};
+        var ingN = anns.filter(function(a){ return a.stt === 'ing'; }).length;
         var st = '<div class="stat"><div><b>' + (last.new||0) + '</b><span>직전 수집 신규</span></div>' +
+          '<div class="cb" data-ann="1" style="display:block;grid-template-columns:none;padding:10px 12px"><b>' + ingN + '</b><span>접수 중 관련 공고 →</span></div>' +
           '<div><b>' + CL.reduce(function(a,c){ return a + c.queries.filter(function(q){return q.auto;}).length; }, 0) + '</b><span>자동 추출 키워드</span></div>' +
           '<div><b>' + (d.kw.n_projects||0) + '</b><span>반영 과제</span></div>' +
           '<div><b>' + ((d.kw.counts||{})['특허']||0) + '·' + ((d.kw.counts||{})['논문']||0) + '·' + ((d.kw.counts||{})['SW']||0) + '</b><span>특허·논문·SW</span></div></div>' +
@@ -440,6 +485,8 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
       if (!keep) S.shown = 60;
       var cnt = renderTabs(); renderList(); renderSide(cnt);
       [].forEach.call(document.querySelectorAll('#kindSeg button'), function(b){ b.classList.toggle('on', b.dataset.v === S.kind); });
+      $('periodSeg').classList.toggle('off', S.kind === 'ann');
+      $('periodSeg').title = S.kind === 'ann' ? '사업공고는 기간과 관계없이 상태별로 모두 표시됩니다' : '';
       [].forEach.call(document.querySelectorAll('#periodSeg button'), function(b){ b.classList.toggle('on', +b.dataset.v === S.days); });
       save();
     }
@@ -458,6 +505,7 @@ footer{font-size:11.5px;color:var(--tx3);text-align:center;padding:0 0 32px}
     });
     $('side').addEventListener('click', function(e){
       var cb = e.target.closest('.cb');
+      if (cb && cb.dataset.ann) { S.kind = 'ann'; S.cl = 'all'; render(); window.scrollTo({top:0, behavior:'smooth'}); return; }
       if (cb) { S.cl = cb.dataset.c; render(); window.scrollTo({top:0, behavior:'smooth'}); return; }
       var kw = e.target.closest('.kw');
       if (kw) { $('q').value = kw.dataset.q; S.q = kw.dataset.q; S.days = 0; $('sform').classList.add('has'); render(); return; }

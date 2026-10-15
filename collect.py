@@ -58,6 +58,7 @@ def gnews(query):
         title = (it.findtext("title") or "").strip()
         if name and title.endswith(" - " + name):
             title = title[: -len(name) - 3].strip()
+        title = clean(title)
         try:
             pub = parsedate_to_datetime(it.findtext("pubDate")).astimezone(KST)
         except Exception:
@@ -66,6 +67,11 @@ def gnews(query):
                     "d": urllib.parse.urlparse(src.get("url", "")).netloc if src is not None else "",
                     "p": pub.strftime("%Y-%m-%d %H:%M")})
     return out
+
+
+def clean(title):
+    # 기관 사이트 제목 뒤에 붙는 메뉴 경로(" | 전체 | 뉴스클리핑 | 홍보관 …")를 잘라낸다
+    return title.split(" | ")[0].strip() if " | " in title else title
 
 
 def norm(title):
@@ -77,11 +83,38 @@ def hit(title, groups):
     return all(any(w.lower() in t for w in g) for g in groups)
 
 
+# 부처·전문기관·공공연구기관 도메인 (정책브리핑에 안 올라오는 기관 자료·공고를 잡는다)
+INST_SITES = ["molit.go.kr", "motie.go.kr", "msit.go.kr", "police.go.kr", "mss.go.kr", "me.go.kr", "kotsa.or.kr",
+              "katech.re.kr", "keit.re.kr", "kiat.or.kr", "kaia.re.kr", "iitp.kr", "etri.re.kr", "koroad.or.kr",
+              "kistep.re.kr", "kari.re.kr", "kiapi.or.kr", "kiro.re.kr", "kitech.re.kr", "nipa.kr", "ktl.re.kr",
+              "krri.re.kr", "kict.re.kr", "koti.re.kr", "kipot.or.kr", "ntis.go.kr", "kosha.or.kr", "kotra.or.kr"]
+INST_Q = "(" + " OR ".join("site:" + d for d in INST_SITES) + ")"
+ANN_WORDS = ["공고", "모집", "공모", "시행계획", "선정계획", "참여기업", "수요조사"]
+# IRIS 공고 중 특정 묶음에 안 걸려도 보관할 모빌리티 일반어
+ANN_GENERAL = ["자동차", "미래차", "차량", "자율주행", "도로교통", "국토교통", "모빌리티산업", "모빌리티 "]
+IRIS = "https://www.iris.go.kr/contents/"
+
+
+def iris(prg, page):
+    req = urllib.request.Request(IRIS + "retrieveBsnsAncmBtinSituList.do",
+                                 data=urllib.parse.urlencode({"pageIndex": page, "ancmPrg": prg}).encode(),
+                                 headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read())
+    return d.get("listBsnsAncmBtinSitu") or [], d["paginationInfo"]["totalPageCount"]
+
+
 def is_gov(domain):
     return domain.endswith("korea.kr") or domain.endswith(".go.kr")
 
 
+def is_inst(domain):
+    return any(domain == d or domain.endswith("." + d) for d in INST_SITES) or         domain.endswith(".re.kr") or domain.endswith(".or.kr")
+
+
 def kind_of(raw, forced):
+    if is_inst(raw["d"]) and not is_gov(raw["d"]):
+        return "inst"       # 공공·연구기관 자료
     if forced or is_gov(raw["d"]):
         return "gov"        # 정부 발표(정책브리핑·부처·지자체)
     if any(w in raw["t"] for w in POLICY_WORDS):
@@ -96,11 +129,28 @@ def main():
     items, months = {}, set()
     for path in sorted(glob.glob(os.path.join(DATA, "20??-??.enc.json"))):
         for x in read(path):
+            x["t"] = clean(x["t"])
             items[x["id"]] = x
     meta_path = os.path.join(DATA, "meta.enc.json")
     meta = read(meta_path) if os.path.exists(meta_path) else {"runs": [], "qhits": {}}
 
     window = "30d" if not items else "3d"   # 첫 수집은 한 달치를 채운다
+    inst_window = "3d" if meta.get("inst_init") else "60d"   # 공공기관 검색 첫 실행은 두 달치
+    ann_path = os.path.join(DATA, "ann.enc.json")
+    anns = {a["id"]: a for a in read(ann_path)} if os.path.exists(ann_path) else {}
+    for a in list(anns.values()):   # 일반어 기준이 바뀌면 묶음 없는 IRIS 공고를 다시 거른다
+        if a["src"] == "IRIS" and not a.get("c") and not any(w in a["t"] for w in ANN_GENERAL):
+            del anns[a["id"]]
+    ann_before = len(anns)
+
+    def add_ann(a, cids):
+        x = anns.get(a["id"])
+        if x is None:
+            a["f"] = NOW.strftime("%Y-%m-%d %H:%M")
+            anns[a["id"]] = x = a
+        else:
+            x.update({k: v for k, v in a.items() if k != "c"})   # 상태·접수기간은 최신값으로
+        x["c"] = sorted(set(x.get("c", [])) | set(cids))
     before, new_ids, errors, qhits = len(items), set(), [], {}
 
     def add(raw, cid, kind, q):
@@ -112,7 +162,7 @@ def main():
             new_ids.add(key)
         if cid not in x["c"]:
             x["c"].append(cid)
-        rank = {"news": 0, "policy": 1, "gov": 2}
+        rank = {"news": 0, "policy": 1, "inst": 2, "gov": 3}
         if rank[kind] > rank[x["k"]]:
             x["k"] = kind
         return 1
@@ -123,6 +173,7 @@ def main():
             jobs.append((cl, q["q"], f'{q["q"]} when:{window}', "news"))
         for p in cl["policy"]:
             jobs.append((cl, f"정책브리핑: {p}", f"{p} site:korea.kr when:{window}", "gov"))
+            jobs.append((cl, f"공공기관: {p}", f"{p} {INST_Q} when:{inst_window}", "inst"))
 
     for cl, label, query, kind in jobs:
         try:
@@ -132,17 +183,52 @@ def main():
             continue
         n = 0
         for raw in res:
-            if not raw["t"]:
-                continue
+            if not raw["t"] or "HOME" in raw["t"] or " > " in raw["t"] or raw["t"] == raw["s"]:
+                continue   # 기관 홈페이지·메뉴 페이지 제목은 버린다
             if any(w in raw["t"] for w in SPAM) or any(w in raw["t"] for w in cl.get("exclude", [])):
                 continue
             k = kind_of(raw, kind == "gov")
             ok = hit(raw["t"], cl["must"]) or (k == "gov" and any(
                 all(w.lower() in raw["t"].lower() for w in p.split()) for p in cl["policy"]))
-            if ok:
+            if ok and k in ("inst", "gov") and any(w in raw["t"] for w in ANN_WORDS):
+                # 기관 사이트의 모집·공고 글은 사업공고 쪽으로 보관
+                add_ann({"id": "w" + hashlib.sha1(norm(raw["t"]).encode()).hexdigest()[:11], "t": raw["t"],
+                         "u": raw["u"], "org": raw["s"], "gov": "", "de": raw["p"][:10], "rs": "", "re": "",
+                         "st": "", "src": raw["d"]}, [cl["id"]])
+                n += 1
+            elif ok:
                 n += add(raw, cl["id"], k, label)
         qhits[f'{cl["id"]}|{label}'] = n
         time.sleep(1.0)
+
+    # IRIS 사업공고: 진행중 전체 + 예정·마감 최근 몇 페이지(첫 실행은 더 깊게)
+    deep = not meta.get("inst_init")
+    for prg, pages in (("ancmIng", 99), ("ancmPre", 30 if deep else 5), ("ancmEnd", 30 if deep else 5)):
+        page, total = 1, 1
+        while page <= min(total, pages):
+            try:
+                rows, total = iris(prg, page)
+            except Exception as e:
+                errors.append(f"IRIS {prg} p{page}: {e}")
+                break
+            for r in rows:
+                t = (r.get("ancmTl") or "").strip()
+                if not t or "TEST" in t.upper():
+                    continue
+                tl = t.lower()
+                cids = [cl["id"] for cl in kw["clusters"] if any(w.lower() in tl for w in cl["must"][0])
+                        and not any(w in t for w in cl.get("exclude", []))]
+                if not cids and not any(w in t for w in ANN_GENERAL):
+                    continue
+                add_ann({"id": "i" + r["ancmId"], "t": t, "u": IRIS + "retrieveBsnsAncmView.do?ancmId=" + r["ancmId"],
+                         "org": r.get("sorgnNm") or "", "gov": r.get("blngGovdSeNm") or "", "no": r.get("ancmNo") or "",
+                         "de": r.get("ancmDe") or "", "rs": (r.get("rcveStrDe") or "").replace(".", "-"),
+                         "re": (r.get("rcveEndDe") or "").replace(".", "-"), "st": r.get("rcveStt") or "",
+                         "src": "IRIS"}, cids)
+            page += 1
+            time.sleep(0.7)
+    write(ann_path, sorted(anns.values(), key=lambda a: (a["de"], a["id"]), reverse=True), salt)
+    meta["inst_init"] = True
 
     # 월별 파일로 다시 나눠 쓰기 (바뀐 달만 실제로 파일이 바뀐다)
     by_month = {}
@@ -162,7 +248,10 @@ def main():
     meta["qhits"] = qhits
     meta["errors"] = errors[:20]
     write(meta_path, meta, salt)
-    print(f"수집 {meta['last_run']}: 신규 {len(new_ids)}건 / 누적 {len(items)}건 (이전 {before}) / 오류 {len(errors)}")
+    meta["ann_total"] = len(anns)
+    write(meta_path, meta, salt)
+    print(f"수집 {meta['last_run']}: 신규 {len(new_ids)}건 / 누적 {len(items)}건 (이전 {before}) / "
+          f"공고 {len(anns)}건 (신규 {len(anns) - ann_before}) / 오류 {len(errors)}")
     for e in errors[:10]:
         print("  !", e)
 
