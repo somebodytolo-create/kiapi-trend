@@ -99,9 +99,15 @@ def iris(prg, page):
     req = urllib.request.Request(IRIS + "retrieveBsnsAncmBtinSituList.do",
                                  data=urllib.parse.urlencode({"pageIndex": page, "ancmPrg": prg}).encode(),
                                  headers={"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        d = json.loads(r.read())
-    return d.get("listBsnsAncmBtinSitu") or [], d["paginationInfo"]["totalPageCount"]
+    for attempt in range(3):   # 해외(Actions) 접속은 가끔 느려 재시도한다
+        try:
+            with urllib.request.urlopen(req, timeout=45) as r:
+                d = json.loads(r.read())
+            return d.get("listBsnsAncmBtinSitu") or [], d["paginationInfo"]["totalPageCount"]
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(10 * (attempt + 1))
 
 
 def is_gov(domain):
